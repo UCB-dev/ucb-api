@@ -85,7 +85,8 @@ app.get('/validate-email', async (req, res) => {
     // Usar parámetros preparados para prevenir inyección SQL
     const query = 'SELECT EXISTS(SELECT 1 FROM usuarios WHERE correo = $1) AS exists';
     const result = await client.query(query, [email]);
-
+    
+    // Devolver solo true o false sin exponer información adicional
     res.json({
       exists: result.rows[0].exists
     });
