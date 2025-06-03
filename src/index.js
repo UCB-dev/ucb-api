@@ -69,6 +69,25 @@ app.get('/users', async (req, res) => {
   }
 });
 
+app.get('/materias', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const result = await client.query('SELECT * FROM materias');
+    res.json({
+      data: result.rows
+    });
+  } catch (error) {
+    console.error('Error al conectar con la base de datos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al conectar con la base de datos',
+      error: error.message
+    });
+  } finally {
+    client.release(); 
+  }
+});
+
 app.get('/validate-email', async (req, res) => {
   // Validar que se proporcione un correo
   const { email } = req.query;
