@@ -68,6 +68,27 @@ app.get('/users', async (req, res) => {
     client.release(); 
   }
 });
+app.get('/elementos', async (req, res) => {
+
+  const client = await pool.connect();
+  const { materia} = req.query;
+  try {
+    const query = 'SELECT e.* FROM elementos_competencia e JOIN materias m ON e.materia_id = m.id WHERE m.id = $1';
+    const result = await client.query(query, [materia]);
+    res.json({
+      data: result.rows
+    });
+  } catch (error) {
+    console.error('Error al conectar con la base de datos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al conectar con la base de datos',
+      error: error.message
+    });
+  } finally {
+    client.release(); 
+  }
+});
 
 app.get('/materias', async (req, res) => {
 
@@ -92,7 +113,6 @@ app.get('/materias', async (req, res) => {
 });
 
 app.get('/validate-email', async (req, res) => {
-  // Validar que se proporcione un correo
   const { email } = req.query;
   
   if (!email || !isValidEmail(email)) {
@@ -107,8 +127,6 @@ app.get('/validate-email', async (req, res) => {
 
     const query = 'SELECT EXISTS(SELECT 1 FROM usuarios WHERE correo = $1) AS exists';
     const result = await client.query(query, [email]);
-    
-    // Devolver solo true o false sin exponer información adicional
     res.json({
       exists: result.rows[0].exists
     });
