@@ -70,9 +70,12 @@ app.get('/users', async (req, res) => {
 });
 
 app.get('/materias', async (req, res) => {
+
   const client = await pool.connect();
+  const { email} = req.query;
   try {
-    const result = await client.query('SELECT * FROM materias');
+    const query = 'SELECT m.* FROM materias m JOIN usuarios u ON m.docente_id = u.id WHERE u.correo = $1';
+    const result = await client.query(query, [email]);
     res.json({
       data: result.rows
     });
@@ -101,7 +104,7 @@ app.get('/validate-email', async (req, res) => {
 
   const client = await pool.connect();
   try {
-    // Usar parámetros preparados para prevenir inyección SQL
+
     const query = 'SELECT EXISTS(SELECT 1 FROM usuarios WHERE correo = $1) AS exists';
     const result = await client.query(query, [email]);
     
