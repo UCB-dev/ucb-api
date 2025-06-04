@@ -73,7 +73,7 @@ app.get('/elementos', async (req, res) => {
   const client = await pool.connect();
   const { materia} = req.query;
   try {
-    const query = 'SELECT e.* FROM elementos_competencia e JOIN materias m ON e.materia_id = m.id WHERE m.id = $1';
+    const query = 'SELECT e.* FROM elementos_competencia e JOIN materias m ON e.materia_id = m.id WHERE m.id = $1 ORDER BY e.descripcion';
     const result = await client.query(query, [materia]);
     res.json({
       data: result.rows
