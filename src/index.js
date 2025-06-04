@@ -68,6 +68,47 @@ app.get('/users', async (req, res) => {
     client.release(); 
   }
 });
+app.get('/saberes', async (req, res) => {
+
+  const client = await pool.connect();
+  const { elemento} = req.query;
+  try {
+    const query = 'SELECT s.* FROM saberes_minimos s JOIN elementos_competencia e ON s.elemento_competencia_id = e.id WHERE e.id = $1';
+    const result = await client.query(query, [elemento]);
+    res.json({
+      data: result.rows
+    });
+  } catch (error) {
+    console.error('Error al conectar con la base de datos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al conectar con la base de datos',
+      error: error.message
+    });
+  } finally {
+    client.release(); 
+  }
+});
+
+app.get('/users', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const result = await client.query('SELECT * FROM usuarios');
+    res.json({
+      success: true,
+      data: result.rows
+    });
+  } catch (error) {
+    console.error('Error al conectar con la base de datos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al conectar con la base de datos',
+      error: error.message
+    });
+  } finally {
+    client.release(); 
+  }
+});
 app.get('/elementos', async (req, res) => {
 
   const client = await pool.connect();
