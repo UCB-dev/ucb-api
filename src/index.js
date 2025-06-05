@@ -69,6 +69,41 @@ app.get('/users', async (req, res) => {
   }
 });
 
+app.patch('/saber/:id/completado', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { completado } = req.body;
+    
+    const result = await client.query(
+      'UPDATE saberes_minimos SET completado = $1 WHERE id = $2 RETURNING *',
+      [completado, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Saber no encontrado'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Estado actualizado correctamente'
+    });
+
+  } catch (error) {
+    console.error('Error al actualizar el saber:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al actualizar el saber',
+      error: error.message
+    });
+  } finally {
+    client.release();
+  }
+});
+
 app.get('/recuperatorios', async (req, res) => {
 
   const client = await pool.connect();
