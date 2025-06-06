@@ -26,8 +26,8 @@ const port = process.env.PORT || 5001;
 
 
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutos
-  max: 100, // límite de 100 solicitudes por ventana de IP
+  windowMs: 15 * 60 * 1000, 
+  max: 100, 
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -66,6 +66,215 @@ app.get('/users', async (req, res) => {
     });
   } finally {
     client.release(); 
+  }
+});
+
+app.patch('/materia/:id', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { rec_tomados, elem_completados, elem_evaluados, vigente } = req.body;
+    
+    if (rec_tomados === undefined && elem_completados === undefined && 
+        elem_evaluados === undefined && vigente === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Debe proporcionar al menos un campo para actualizar (rec_tomados, elem_completados, elem_evaluados, vigente)'
+      });
+    }
+
+    let updateFields = [];
+    let values = [];
+    let paramIndex = 1;
+
+    if (rec_tomados !== undefined) {
+      updateFields.push(`rec_tomados = $${paramIndex}`);
+      values.push(rec_tomados);
+      paramIndex++;
+    }
+
+    if (elem_completados !== undefined) {
+      updateFields.push(`elem_completados = $${paramIndex}`);
+      values.push(elem_completados);
+      paramIndex++;
+    }
+
+    if (elem_evaluados !== undefined) {
+      updateFields.push(`elem_evaluados = $${paramIndex}`);
+      values.push(elem_evaluados);
+      paramIndex++;
+    }
+
+    if (vigente !== undefined) {
+      updateFields.push(`vigente = $${paramIndex}`);
+      values.push(vigente);
+      paramIndex++;
+    }
+
+    values.push(id); 
+
+    const query = `UPDATE materias SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
+    
+    const result = await client.query(query, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Materia no encontrada'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Materia actualizada correctamente'
+    });
+
+  } catch (error) {
+    console.error('Error al actualizar la materia:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al actualizar la materia',
+      error: error.message
+    });
+  } finally {
+    client.release();
+  }
+});
+
+app.patch('/elemento/:id', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { evaluado, comentario, fecha_registro, saberes_completados, completado } = req.body;
+    
+    if (evaluado === undefined && comentario === undefined && fecha_registro === undefined && 
+        saberes_completados === undefined && completado === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Debe proporcionar al menos un campo para actualizar (evaluado, comentario, fecha_registro, saberes_completados, completado)'
+      });
+    }
+
+    let updateFields = [];
+    let values = [];
+    let paramIndex = 1;
+
+    if (evaluado !== undefined) {
+      updateFields.push(`evaluado = $${paramIndex}`);
+      values.push(evaluado);
+      paramIndex++;
+    }
+
+    if (comentario !== undefined) {
+      updateFields.push(`comentario = $${paramIndex}`);
+      values.push(comentario);
+      paramIndex++;
+    }
+
+    if (fecha_registro !== undefined) {
+      updateFields.push(`fecha_registro = $${paramIndex}`);
+      values.push(fecha_registro);
+      paramIndex++;
+    }
+
+    if (saberes_completados !== undefined) {
+      updateFields.push(`saberes_completados = $${paramIndex}`);
+      values.push(saberes_completados);
+      paramIndex++;
+    }
+
+    if (completado !== undefined) {
+      updateFields.push(`completado = $${paramIndex}`);
+      values.push(completado);
+      paramIndex++;
+    }
+
+    values.push(id);
+
+    const query = `UPDATE elementos_competencia SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
+    
+    const result = await client.query(query, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Elemento no encontrado'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Elemento actualizado correctamente'
+    });
+
+  } catch (error) {
+    console.error('Error al actualizar el elemento:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al actualizar el elemento',
+      error: error.message
+    });
+  } finally {
+    client.release();
+  }
+});
+
+app.patch('/recuperatorio/:id', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { completado, fecha_evaluado } = req.body;
+    
+    if (completado === undefined && fecha_evaluado === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Debe proporcionar al menos un campo para actualizar (completado, fecha_evaluado)'
+      });
+    }
+
+    let updateFields = [];
+    let values = [];
+    let paramIndex = 1;
+
+    if (completado !== undefined) {
+      updateFields.push(`completado = $${paramIndex}`);
+      values.push(completado);
+      paramIndex++;
+    }
+
+    if (fecha_evaluado !== undefined) {
+      updateFields.push(`fecha_evaluado = $${paramIndex}`);
+      values.push(fecha_evaluado);
+      paramIndex++;
+    }
+
+    values.push(id); 
+
+    const query = `UPDATE recuperatorios SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
+    
+    const result = await client.query(query, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recuperatorio no encontrado'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Recuperatorio actualizado correctamente'
+    });
+
+  } catch (error) {
+    console.error('Error al actualizar el recuperatorio:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al actualizar el recuperatorio',
+      error: error.message
+    });
+  } finally {
+    client.release();
   }
 });
 
