@@ -68,6 +68,101 @@ app.get('/users', async (req, res) => {
     client.release(); 
   }
 });
+app.delete('/recuperatorio/:id', async (req, res) => {
+  const client = await pool.connect();
+  
+  try {
+    const { id } = req.params;
+    
+    if (!id || isNaN(parseInt(id))) {
+      return res.status(400).json({
+        success: false,
+        message: 'ID de recuperatorio inválido'
+      });
+    }
+    
+
+    const checkQuery = 'SELECT id FROM recuperatorios WHERE id = $1';
+    const checkResult = await client.query(checkQuery, [parseInt(id)]);
+    
+    if (checkResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recuperatorio no encontrado'
+      });
+    }
+    
+    const deleteQuery = 'DELETE FROM recuperatorios WHERE id = $1 RETURNING *';
+    const deleteResult = await client.query(deleteQuery, [parseInt(id)]);
+    
+    res.json({
+      success: true,
+      message: 'Recuperatorio eliminado exitosamente'
+    });
+    
+  } catch (error) {
+    console.error('Error al eliminar recuperatorio:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al eliminar recuperatorio',
+      error: error.message
+    });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/recuperatorio', async (req, res) => {
+  const client = await pool.connect();
+  
+  try {
+    const { completado, elemento_competencia_id, fecha_evaluado } = req.body;
+    
+    if (elemento_competencia_id === undefined || completado === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Los campos elemento_competencia_id y completado son requeridos'
+      });
+    }
+    
+    const query = `
+      INSERT INTO recuperatorios (completado, elemento_competencia_id, fecha_evaluado) 
+      VALUES ($1, $2, $3) 
+      RETURNING *
+    `;
+    
+    const values = [
+      completado,
+      elemento_competencia_id,
+      fecha_evaluado || null 
+    ];
+    
+    const result = await client.query(query, values);
+    
+    res.status(201).json({
+      success: true,
+      message: 'Recuperatorio creado exitosamente'
+    });
+    
+  } catch (error) {
+    console.error('Error al crear recuperatorio:', error);
+    
+    if (error.code === '23503') {
+      res.status(400).json({
+        success: false,
+        message: 'El elemento_competencia_id especificado no existe'
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Error al crear recuperatorio',
+        error: error.message
+      });
+    }
+  } finally {
+    client.release();
+  }
+});
 
 app.patch('/materia/:id', async (req, res) => {
   const client = await pool.connect();
