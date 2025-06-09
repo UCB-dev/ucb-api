@@ -164,6 +164,60 @@ app.post('/recuperatorio', async (req, res) => {
   }
 });
 
+app.patch('/materia/:id/increment', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { 
+      rec_tomados = 0, 
+      elem_completados = 0, 
+      elem_evaluados = 0 
+    } = req.body;
+    
+    if (rec_tomados === 0 && elem_completados === 0 && elem_evaluados === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Debe proporcionar al menos un incremento diferente de 0'
+      });
+    }
+
+    const query = `
+      UPDATE materias 
+      SET 
+        rec_tomados = COALESCE(rec_tomados, 0) + $1,
+        elem_completados = COALESCE(elem_completados, 0) + $2,
+        elem_evaluados = COALESCE(elem_evaluados, 0) + $3
+      WHERE id = $4 
+      RETURNING *
+    `;
+    
+    const result = await client.query(query, [rec_tomados, elem_completados, elem_evaluados, id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Materia no encontrada'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Materia incrementada correctamente',
+      data: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error('Error al incrementar la materia:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al incrementar la materia',
+      error: error.message
+    });
+  } finally {
+    client.release();
+  }
+});
+
 app.patch('/materia/:id', async (req, res) => {
   const client = await pool.connect();
   try {
