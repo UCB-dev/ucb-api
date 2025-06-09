@@ -552,6 +552,37 @@ app.get('/elementos', async (req, res) => {
   }
 });
 
+app.get('/materia/:id', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+
+    const query = 'SELECT * FROM materias WHERE id = $1';
+    const result = await client.query(query, [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Materia no encontrada'
+      });
+    }
+
+    res.json({
+      data: result.rows
+    });
+
+  } catch (error) {
+    console.error('Error al obtener la materia:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener la materia',
+      error: error.message
+    });
+  } finally {
+    client.release();
+  }
+});
+
 app.get('/materias', async (req, res) => {
 
   const client = await pool.connect();
