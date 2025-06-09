@@ -240,7 +240,7 @@ app.patch('/elemento/:id', async (req, res) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
-    const { evaluado, comentario, fecha_registro, saberes_completados, completado } = req.body;
+    const { evaluado, comentario, fecha_registro, fecha_evaluado, saberes_completados, completado } = req.body;
     
     if (evaluado === undefined && comentario === undefined && fecha_registro === undefined && 
         saberes_completados === undefined && completado === undefined) {
@@ -269,6 +269,11 @@ app.patch('/elemento/:id', async (req, res) => {
     if (fecha_registro !== undefined) {
       updateFields.push(`fecha_registro = $${paramIndex}`);
       values.push(fecha_registro);
+      paramIndex++;
+    }
+    if (fecha_evaluado !== undefined) {
+      updateFields.push(`fecha_evaluado = $${paramIndex}`);
+      values.push(fecha_evaluado);
       paramIndex++;
     }
 
