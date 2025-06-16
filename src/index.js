@@ -512,7 +512,7 @@ app.post('/recuperatorio', async (req, res) => {
     }
     
     const query = `
-      INSERT INTO recuperatorios (completado, elemento_competencia_id, fecha_evaluado) 
+      INSERT INTO recuperatorio (completado, elemento_competencia_id, fecha_evaluado) 
       VALUES ($1, $2, $3) 
       RETURNING *
     `;
@@ -790,7 +790,7 @@ app.patch('/recuperatorio/:id', async (req, res) => {
 
     values.push(id); 
 
-    const query = `UPDATE recuperatorios SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
+    const query = `UPDATE recuperatorio SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
     
     const result = await client.query(query, values);
 
@@ -858,7 +858,7 @@ app.get('/recuperatorios', async (req, res) => {
   const client = await pool.connect();
   const { elemento} = req.query;
   try {
-    const query = 'SELECT r.* FROM recuperatorios r JOIN elemento_competencia e ON r.elemento_competencia_id = e.id WHERE e.id = $1';
+    const query = 'SELECT r.* FROM recuperatorio r JOIN elemento_competencia e ON r.elemento_competencia_id = e.id WHERE e.id = $1';
     const result = await client.query(query, [elemento]);
     res.json({
       data: result.rows
