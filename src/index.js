@@ -276,55 +276,28 @@ app.get('/validate-email', async (req, res) => {
   }
 });
 
-app.get('/notificaciones/:email', async (req, res) => {
-  const { email } = req.params;
+app.get('/notificaciones', async (req, res) => {
 
+  const client = await pool.connect();
+  const { email} = req.query;
   try {
-    const userResult = await query(
-      'SELECT id FROM usuario WHERE correo = $1',
-      [email]
-    );
-
-    if (userResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Usuario no encontrado'
-      });
-    }
-
-    const userId = userResult.rows[0].id;
-
-    
-    const notificationsResult = await query(
-      `
-      SELECT n.id, n.usuario_id, n.mensaje AS message, 'general' AS type, n.fecha AS sent_at, n.leida AS is_read
-      FROM notificacion n
-      WHERE n.usuario_id = $1
-      ORDER BY n.fecha DESC
-      `,
-      [userId]
-    );
-    
-    const notifications = notificationsResult.rows.map(n => ({
-      ...n,
-      isRead: n.is_read,
-      sentAt: n.sent_at,
-      message: n.message
-    }));
-
+    const query = 'SELECT n.* FROM notificacion n JOIN usuario u ON n.usuario_id = u.id WHERE u.correo = $1';
+    const result = await client.query(query, [email]);
     res.json({
-      success: true,
-      data: notifications
+      data: result.rows
     });
-
   } catch (error) {
-    console.error('Error fetching notifications:', error);
+    console.error('Error al conectar con la base de datos:', error);
     res.status(500).json({
       success: false,
-      message: 'Error al obtener notificaciones'
+      message: 'Error al conectar con la base de datos',
+      error: error.message
     });
+  } finally {
+    client.release(); 
   }
 });
+
 
 
 app.patch('/notificaciones/:id/read', async (req, res) => {
