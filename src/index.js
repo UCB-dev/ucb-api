@@ -68,7 +68,6 @@ app.use(session({
 app.use(passport.initialize());
 app.use(passport.session());
 
-// Función helper para ejecutar queries
 async function query(text, params) {
   const client = await pool.connect();
   try {
@@ -91,13 +90,20 @@ function isValidEmail(email) {
 
 async function sendFCMNotification(fcmToken, payload) {
   try {
-    if (!fcmToken) {
-      console.log('No FCM token provided');
+    const tokens = await query(
+      'SELECT fcm_token FROM usuario_fcm_token WHERE user_id = $1',
+      [userId]
+    );
+    
+    if (tokens.length === 0) {
+      console.log(`No hay tokens FCM para el usuario ${userId}`);
       return;
     }
 
+    const fcmTokens = tokens.map(row => row.fcm_token);
+
     const message = {
-      token: fcmToken,
+      tokens: fcmTokens,
       notification: {
         title: payload.title,
         body: payload.body
@@ -108,16 +114,30 @@ async function sendFCMNotification(fcmToken, payload) {
       }
     };
 
-    const response = await admin.messaging().send(message);
-    console.log('FCM notification sent successfully:', response);
+    const response = await admin.messaging().sendMulticast(message);
+
+    if (response.failureCount > 0) {
+      const failedTokens = [];
+      response.responses.forEach((resp, idx) => {
+        if (!resp.success) {
+          failedTokens.push(fcmTokens[idx]);
+        }
+      });
+      
+      if (failedTokens.length > 0) {
+        await query(
+          'DELETE FROM usuario_fcm_token WHERE fcm_token = ANY($1)',
+          [failedTokens]
+        );
+        console.log(`Removed ${failedTokens.length} invalid FCM tokens`);
+      }
+    }
+
+    console.log(`Notificación enviada a ${response.successCount} dispositivos del usuario ${userId}`);
     return response;
   } catch (error) {
     console.error('Error sending FCM notification:', error);
     
-    if (error.code === 'messaging/invalid-registration-token' || 
-        error.code === 'messaging/registration-token-not-registered') {
-      await removeInvalidFcmToken(fcmToken);
-    }
   }
 }
 
@@ -189,7 +209,6 @@ async function checkAndSendNotifications() {
     
     console.log(`Found ${overdueCompetitions.length} overdue competitions`);
     console.log(`Found ${upcomingCompetitions.length} upcoming competitions`);
-    
     for (const comp of overdueCompetitions) {
       await sendFCMNotification(comp.fcm_token, {
         title: "Fecha límite vencida",
@@ -206,6 +225,8 @@ async function checkAndSendNotifications() {
         `${comp.descripcion} - La fecha límite ha pasado`
       );
     }
+
+   
     
     for (const comp of upcomingCompetitions) {
       await sendFCMNotification(comp.fcm_token, {
@@ -331,26 +352,41 @@ app.delete('/notificaciones/:id', async (req, res) => {
 
 app.post('/fcm-token', async (req, res) => {
   try {
-    const { userId, fcmToken } = req.body;
+    const { email, fcmToken } = req.body;
     
-    if (!userId || !fcmToken) {
+    if (!email || !fcmToken) {
       return res.status(400).json({
         success: false,
-        message: 'userId y fcmToken son requeridos'
+        message: 'email y fcmToken son requeridos'
       });
     }
     
     
+    const userResult = await query(
+      'SELECT id FROM usuario WHERE correo = $1 AND activo = true',
+      [email]
+    );
+    
+    if (userResult.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado o inactivo'
+      });
+    }
+    
+    const userId = userResult[0].id;
+    
+    
     const existingToken = await query(
-      'SELECT id FROM usuario_fcm_token WHERE user_id = $1',
-      [userId]
+      'SELECT id FROM usuario_fcm_token WHERE fcm_token = $1',
+      [fcmToken]
     );
     
     if (existingToken.length > 0) {
       
       await query(
-        'UPDATE usuario_fcm_token SET fcm_token = $1, updated_at = NOW() WHERE user_id = $2',
-        [fcmToken, userId]
+        'UPDATE usuario_fcm_token SET updated_at = NOW() WHERE fcm_token = $1',
+        [fcmToken]
       );
     } else {
       
@@ -360,7 +396,10 @@ app.post('/fcm-token', async (req, res) => {
       );
     }
     
-    res.json({ success: true });
+    res.json({ 
+      success: true,
+      message: 'Token FCM registrado correctamente'
+    });
   } catch (error) {
     console.error('Error updating FCM token:', error);
     res.status(500).json({
@@ -369,7 +408,6 @@ app.post('/fcm-token', async (req, res) => {
     });
   }
 });
-
 
 app.get('/competitions/:userId', async (req, res) => {
   try {
