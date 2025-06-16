@@ -134,16 +134,17 @@ async function removeInvalidFcmToken(fcmToken) {
 
 async function saveNotificationToHistory(userId, competitionId, type, title, message) {
   try {
-    const fullMessage = `${title}: ${message} (Tipo: ${type})`;
     await query(`
-      INSERT INTO notificacion (usuario_id, mensaje, fecha, leida)
-      VALUES ($1, $2, NOW(), FALSE)
-    `, [userId, fullMessage]);
+      INSERT INTO notificacion (usuario_id, competencia_id, tipo, titulo, mensaje, fecha)
+      VALUES ($1, $2, $3, $4, $5, NOW())
+    `, [userId, competitionId, type, title, message]);
     console.log('Notification saved to history');
   } catch (error) {
     console.error('Error saving notification to history:', error);
   }
 }
+
+
 
 
 async function checkAndSendNotifications() {
