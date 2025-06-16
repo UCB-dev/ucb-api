@@ -263,7 +263,7 @@ app.get('/validate-email', async (req, res) => {
   }
   
   try {
-    const result = await query('SELECT EXISTS(SELECT 1 FROM usuarios WHERE correo = $1) AS exists', [email]);
+    const result = await query('SELECT EXISTS(SELECT 1 FROM usuario WHERE correo = $1) AS exists', [email]);
     res.json({
       exists: result[0].exists
     });
@@ -327,7 +327,7 @@ app.get('/notificaciones/:email', async (req, res) => {
 });
 
 
-app.patch('/api/notifications/:id/read', async (req, res) => {
+app.patch('/notificaciones/:id/read', async (req, res) => {
   try {
     const { id } = req.params;
     await query('UPDATE notificacion SET leida = TRUE WHERE id = $1', [id]);
@@ -341,7 +341,7 @@ app.patch('/api/notifications/:id/read', async (req, res) => {
   }
 });
 
-app.delete('/api/notifications/:id', async (req, res) => {
+app.delete('/notificaciones/:id', async (req, res) => {
   try {
     const { id } = req.params;
     await query('DELETE FROM notificacion WHERE id = $1', [id]);
@@ -355,7 +355,7 @@ app.delete('/api/notifications/:id', async (req, res) => {
   }
 });
 
-app.post('/api/fcm-token', async (req, res) => {
+app.post('/fcm-token', async (req, res) => {
   try {
     const { userId, fcmToken } = req.body;
     
@@ -397,7 +397,7 @@ app.post('/api/fcm-token', async (req, res) => {
 });
 
 
-app.get('/api/competitions/:userId', async (req, res) => {
+app.get('/competitions/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
     const competitions = await query(`
@@ -438,7 +438,7 @@ app.post('/test-notificaciones', async (req, res) => {
 app.get('/users', async (req, res) => {
   const client = await pool.connect();
   try {
-    const result = await client.query('SELECT * FROM usuarios');
+    const result = await client.query('SELECT * FROM usuario');
     res.json({
       success: true,
       data: result.rows
@@ -468,7 +468,7 @@ app.delete('/recuperatorio/:id', async (req, res) => {
     }
     
 
-    const checkQuery = 'SELECT id FROM recuperatorios WHERE id = $1';
+    const checkQuery = 'SELECT id FROM recuperatorio WHERE id = $1';
     const checkResult = await client.query(checkQuery, [parseInt(id)]);
     
     if (checkResult.rows.length === 0) {
@@ -478,7 +478,7 @@ app.delete('/recuperatorio/:id', async (req, res) => {
       });
     }
     
-    const deleteQuery = 'DELETE FROM recuperatorios WHERE id = $1 RETURNING *';
+    const deleteQuery = 'DELETE FROM recuperatorio WHERE id = $1 RETURNING *';
     const deleteResult = await client.query(deleteQuery, [parseInt(id)]);
     
     res.json({
@@ -568,7 +568,7 @@ app.patch('/materia/:id/increment', async (req, res) => {
     }
 
     const query = `
-      UPDATE materias 
+      UPDATE materia
       SET 
         rec_tomados = COALESCE(rec_tomados, 0) + $1,
         elem_completados = COALESCE(elem_completados, 0) + $2,
@@ -648,7 +648,7 @@ app.patch('/materia/:id', async (req, res) => {
 
     values.push(id); 
 
-    const query = `UPDATE materias SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
+    const query = `UPDATE materia SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
     
     const result = await client.query(query, values);
 
@@ -921,7 +921,7 @@ app.get('/elementos', async (req, res) => {
   const client = await pool.connect();
   const { materia} = req.query;
   try {
-    const query = 'SELECT e.* FROM elementos_competencia e JOIN materias m ON e.materia_id = m.id WHERE m.id = $1 ORDER BY e.descripcion';
+    const query = 'SELECT e.* FROM elementos_competencia e JOIN materia m ON e.materia_id = m.id WHERE m.id = $1 ORDER BY e.descripcion';
     const result = await client.query(query, [materia]);
     res.json({
       data: result.rows
@@ -943,7 +943,7 @@ app.get('/materia/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const query = 'SELECT * FROM materias WHERE id = $1';
+    const query = 'SELECT * FROM materia WHERE id = $1';
     const result = await client.query(query, [id]);
 
     if (result.rows.length === 0) {
@@ -974,7 +974,7 @@ app.get('/materias', async (req, res) => {
   const client = await pool.connect();
   const { email} = req.query;
   try {
-    const query = 'SELECT m.* FROM materias m JOIN usuarios u ON m.docente_id = u.id WHERE u.correo = $1';
+    const query = 'SELECT m.* FROM materia m JOIN usuarios u ON m.docente_id = u.id WHERE u.correo = $1';
     const result = await client.query(query, [email]);
     res.json({
       data: result.rows
