@@ -731,7 +731,7 @@ app.patch('/elemento/:id', async (req, res) => {
 
     values.push(id);
 
-    const query = `UPDATE elementos_competencia SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
+    const query = `UPDATE elemento_competencia SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
     
     const result = await client.query(query, values);
 
@@ -825,7 +825,7 @@ app.patch('/saber/:id/completado', async (req, res) => {
     const { completado } = req.body;
     
     const result = await client.query(
-      'UPDATE saberes_minimos SET completado = $1 WHERE id = $2 RETURNING *',
+      'UPDATE saber_minimo SET completado = $1 WHERE id = $2 RETURNING *',
       [completado, id]
     );
 
@@ -858,7 +858,7 @@ app.get('/recuperatorios', async (req, res) => {
   const client = await pool.connect();
   const { elemento} = req.query;
   try {
-    const query = 'SELECT r.* FROM recuperatorios r JOIN elementos_competencia e ON r.elemento_competencia_id = e.id WHERE e.id = $1';
+    const query = 'SELECT r.* FROM recuperatorios r JOIN elemento_competencia e ON r.elemento_competencia_id = e.id WHERE e.id = $1';
     const result = await client.query(query, [elemento]);
     res.json({
       data: result.rows
@@ -880,7 +880,7 @@ app.get('/saberes', async (req, res) => {
   const client = await pool.connect();
   const { elemento} = req.query;
   try {
-    const query = 'SELECT s.* FROM saberes_minimos s JOIN elementos_competencia e ON s.elemento_competencia_id = e.id WHERE e.id = $1';
+    const query = 'SELECT s.* FROM saber_minimo s JOIN elemento_competencia e ON s.elemento_competencia_id = e.id WHERE e.id = $1';
     const result = await client.query(query, [elemento]);
     res.json({
       data: result.rows
@@ -921,7 +921,7 @@ app.get('/elementos', async (req, res) => {
   const client = await pool.connect();
   const { materia} = req.query;
   try {
-    const query = 'SELECT e.* FROM elementos_competencia e JOIN materia m ON e.materia_id = m.id WHERE m.id = $1 ORDER BY e.descripcion';
+    const query = 'SELECT e.* FROM elemento_competencia e JOIN materia m ON e.materia_id = m.id WHERE m.id = $1 ORDER BY e.descripcion';
     const result = await client.query(query, [materia]);
     res.json({
       data: result.rows
