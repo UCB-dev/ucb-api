@@ -6,8 +6,27 @@ import passport from 'passport';
 import rateLimit from 'express-rate-limit';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import { Pool } from 'pg';
+import admin from 'firebase-admin';
+import cron from 'node-cron';
 
 dotenv.config();
+
+const serviceAccount = {
+  type: "service_account",
+  project_id: process.env.FIREBASE_PROJECT_ID,
+  private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
+  private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+  client_email: process.env.FIREBASE_CLIENT_EMAIL,
+  client_id: process.env.FIREBASE_CLIENT_ID,
+  auth_uri: "https://accounts.google.com/o/oauth2/auth",
+  token_uri: "https://oauth2.googleapis.com/token",
+  auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+  client_x509_cert_url: process.env.FIREBASE_CLIENT_CERT_URL
+};
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
 
 const pool = new Pool({
   host: process.env.PGHOST,
@@ -24,7 +43,6 @@ const pool = new Pool({
 const app = express();
 const port = process.env.PORT || 5001;
 
-
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, 
   max: 100, 
@@ -38,16 +56,384 @@ const apiLimiter = rateLimit({
 
 app.use(express.json());
 app.use(apiLimiter);
-app.use(cors());
-
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  credentials: true
+}));
 app.use(session({
   secret: process.env.SESSION_SECRET || "secret",
   resave: false,
   saveUninitialized: true,
 }));
-
 app.use(passport.initialize());
 app.use(passport.session());
+
+// Función helper para ejecutar queries
+async function query(text, params) {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(text, params);
+    return result.rows;
+  } catch (error) {
+    console.error('Database query error:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+
+function isValidEmail(email) {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+}
+
+
+async function sendFCMNotification(fcmToken, payload) {
+  try {
+    if (!fcmToken) {
+      console.log('No FCM token provided');
+      return;
+    }
+
+    const message = {
+      token: fcmToken,
+      notification: {
+        title: payload.title,
+        body: payload.body
+      },
+      data: {
+        type: payload.type || 'general',
+        competitionId: payload.competitionId?.toString() || ''
+      }
+    };
+
+    const response = await admin.messaging().send(message);
+    console.log('FCM notification sent successfully:', response);
+    return response;
+  } catch (error) {
+    console.error('Error sending FCM notification:', error);
+    
+    if (error.code === 'messaging/invalid-registration-token' || 
+        error.code === 'messaging/registration-token-not-registered') {
+      await removeInvalidFcmToken(fcmToken);
+    }
+  }
+}
+
+
+async function removeInvalidFcmToken(fcmToken) {
+  try {
+    await query('DELETE FROM usuario_fcm_token WHERE fcm_token = $1', [fcmToken]);
+    console.log('Removed invalid FCM token:', fcmToken);
+  } catch (error) {
+    console.error('Error removing invalid FCM token:', error);
+  }
+}
+
+
+async function saveNotificationToHistory(userId, competitionId, type, title, message) {
+  try {
+    const fullMessage = `${title}: ${message} (Tipo: ${type})`;
+    await query(`
+      INSERT INTO notificacion (usuario_id, mensaje, fecha, leida)
+      VALUES ($1, $2, NOW(), FALSE)
+    `, [userId, fullMessage]);
+    console.log('Notification saved to history');
+  } catch (error) {
+    console.error('Error saving notification to history:', error);
+  }
+}
+
+
+async function checkAndSendNotifications() {
+  console.log('Checking for notifications to send...');
+  
+  try {
+    const now = new Date();
+    const sevenDaysFromNow = new Date(now.getTime() + (7 * 24 * 60 * 60 * 1000));
+    
+    
+    const overdueCompetitions = await query(`
+      SELECT ec.*, ut.fcm_token, ec.id as competition_id, m.docente_id as user_id
+      FROM elemento_competencia ec
+      JOIN materia m ON ec.materia_id = m.id
+      JOIN usuario_fcm_token ut ON m.docente_id = ut.user_id
+      WHERE ec.fecha_limite < $1 
+      AND ec.completado = FALSE
+      AND NOT EXISTS (
+        SELECT 1 FROM notificacion n 
+        WHERE n.usuario_id = m.docente_id 
+        AND n.mensaje LIKE '%' || ec.descripcion || '%'
+        AND n.mensaje LIKE '%deadline_passed%'
+        AND DATE(n.fecha) = CURRENT_DATE
+      )
+    `, [now]);
+    
+    const upcomingCompetitions = await query(`
+      SELECT ec.*, ut.fcm_token, ec.id as competition_id, m.docente_id as user_id
+      FROM elemento_competencia ec
+      JOIN materia m ON ec.materia_id = m.id
+      JOIN usuario_fcm_token ut ON m.docente_id = ut.user_id
+      WHERE ec.fecha_limite BETWEEN $1 AND $2
+      AND ec.completado = FALSE
+      AND NOT EXISTS (
+        SELECT 1 FROM notificacion n 
+        WHERE n.usuario_id = m.docente_id 
+        AND n.mensaje LIKE '%' || ec.descripcion || '%'
+        AND n.mensaje LIKE '%deadline_7days%'
+        AND DATE(n.fecha) = CURRENT_DATE
+      )
+    `, [now, sevenDaysFromNow]);
+    
+    console.log(`Found ${overdueCompetitions.length} overdue competitions`);
+    console.log(`Found ${upcomingCompetitions.length} upcoming competitions`);
+    
+    for (const comp of overdueCompetitions) {
+      await sendFCMNotification(comp.fcm_token, {
+        title: "Fecha límite vencida",
+        body: `${comp.descripcion} - La fecha límite ha pasado`,
+        type: 'deadline_passed',
+        competitionId: comp.competition_id
+      });
+      
+      await saveNotificationToHistory(
+        comp.user_id, 
+        comp.competition_id, 
+        'deadline_passed', 
+        "Fecha límite vencida", 
+        `${comp.descripcion} - La fecha límite ha pasado`
+      );
+    }
+    
+    for (const comp of upcomingCompetitions) {
+      await sendFCMNotification(comp.fcm_token, {
+        title: "Fecha límite próxima",
+        body: `${comp.descripcion} - Vence en 7 días`,
+        type: 'deadline_7days',
+        competitionId: comp.competition_id
+      });
+      
+      await saveNotificationToHistory(
+        comp.user_id, 
+        comp.competition_id, 
+        'deadline_7days',
+        "Fecha límite próxima", 
+        `${comp.descripcion} - Vence en 7 días`
+      );
+    }
+    
+  } catch (error) {
+    console.error('Error in checkAndSendNotifications:', error);
+  }
+}
+
+
+passport.use(
+  new GoogleStrategy(
+    {
+      clientID: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      callbackURL: "http://localhost:3000/auth/google/callback",
+    },
+    (accessToken, refreshToken, profile, done) => {
+      return done(null, profile);
+    }
+  )
+);
+
+passport.serializeUser((user, done) => {
+  done(null, user);
+});
+
+passport.deserializeUser((obj, done) => {
+  done(null, obj);
+});
+
+
+
+app.get('/validate-email', async (req, res) => {
+  const { email } = req.query;
+  
+  if (!email || !isValidEmail(email)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Se requiere un correo electrónico válido'
+    });
+  }
+  
+  try {
+    const result = await query('SELECT EXISTS(SELECT 1 FROM usuarios WHERE correo = $1) AS exists', [email]);
+    res.json({
+      exists: result[0].exists
+    });
+  } catch (error) {
+    console.error('Error al consultar la base de datos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor'
+    });
+  }
+});
+
+app.get('/notificaciones/:email', async (req, res) => {
+  const { email } = req.params;
+
+  try {
+    const userResult = await query(
+      'SELECT id FROM usuario WHERE correo = $1',
+      [email]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado'
+      });
+    }
+
+    const userId = userResult.rows[0].id;
+
+    
+    const notificationsResult = await query(
+      `
+      SELECT n.id, n.usuario_id, n.mensaje AS message, 'general' AS type, n.fecha AS sent_at, n.leida AS is_read
+      FROM notificacion n
+      WHERE n.usuario_id = $1
+      ORDER BY n.fecha DESC
+      `,
+      [userId]
+    );
+    
+    const notifications = notificationsResult.rows.map(n => ({
+      ...n,
+      isRead: n.is_read,
+      sentAt: n.sent_at,
+      message: n.message
+    }));
+
+    res.json({
+      success: true,
+      data: notifications
+    });
+
+  } catch (error) {
+    console.error('Error fetching notifications:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener notificaciones'
+    });
+  }
+});
+
+
+app.patch('/api/notifications/:id/read', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await query('UPDATE notificacion SET leida = TRUE WHERE id = $1', [id]);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error marking notification as read:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al marcar notificación como leída'
+    });
+  }
+});
+
+app.delete('/api/notifications/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await query('DELETE FROM notificacion WHERE id = $1', [id]);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting notification:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al eliminar notificación'
+    });
+  }
+});
+
+app.post('/api/fcm-token', async (req, res) => {
+  try {
+    const { userId, fcmToken } = req.body;
+    
+    if (!userId || !fcmToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'userId y fcmToken son requeridos'
+      });
+    }
+    
+    
+    const existingToken = await query(
+      'SELECT id FROM usuario_fcm_token WHERE user_id = $1',
+      [userId]
+    );
+    
+    if (existingToken.length > 0) {
+      
+      await query(
+        'UPDATE usuario_fcm_token SET fcm_token = $1, updated_at = NOW() WHERE user_id = $2',
+        [fcmToken, userId]
+      );
+    } else {
+      
+      await query(
+        'INSERT INTO usuario_fcm_token (user_id, fcm_token, updated_at) VALUES ($1, $2, NOW())',
+        [userId, fcmToken]
+      );
+    }
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error updating FCM token:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al actualizar token FCM'
+    });
+  }
+});
+
+
+app.get('/api/competitions/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const competitions = await query(`
+      SELECT ec.*, m.name as materia_name, m.sigla
+      FROM elemento_competencia ec
+      JOIN materia m ON ec.materia_id = m.id
+      WHERE m.docente_id = $1 
+      ORDER BY ec.fecha_limite ASC
+    `, [userId]);
+    
+    res.json(competitions);
+  } catch (error) {
+    console.error('Error fetching competitions:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener elementos de competencia'
+    });
+  }
+});
+
+
+app.post('/test-notificaciones', async (req, res) => {
+  try {
+    await checkAndSendNotifications();
+    res.json({ 
+      success: true, 
+      message: 'Verificación de notificaciones completada' 
+    });
+  } catch (error) {
+    console.error('Error testing notifications:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al probar notificaciones'
+    });
+  }
+});
 
 app.get('/users', async (req, res) => {
   const client = await pool.connect();
@@ -650,12 +1036,23 @@ passport.use(
 
 
 
-function isValidEmail(email) {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return emailRegex.test(email);
-}
+cron.schedule('0 * * * *', () => {
+  console.log('Running scheduled notification check...');
+  checkAndSendNotifications();
+});
 
+
+cron.schedule('0 */6 * * *', () => {
+  console.log('Running 6-hour notification check...');
+  checkAndSendNotifications();
+});
 
 app.listen(port, () => {
   console.log(`Server is running on http://localhost:${port}`);
+  console.log('Notification scheduler initialized');
+  
+
+  setTimeout(() => {
+    checkAndSendNotifications();
+  }, 5000); 
 });
