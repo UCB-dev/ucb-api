@@ -1031,6 +1031,142 @@ app.get('/validate-email', async (req, res) => {
     client.release();
   }
 });
+app.post('/create-user', async (req, res) => {
+  const { email, password, displayName } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({
+      success: false,
+      message: 'Email y contraseña son requeridos'
+    });
+  }
+
+
+  const client = await pool.connect();
+  try {
+    
+    const queryCheck = 'SELECT EXISTS(SELECT 1 FROM usuario WHERE correo = $1) AS exists';
+    const resultCheck = await client.query(queryCheck, [email]);
+  
+
+    const userRecord = await admin.auth().createUser({
+      email: email,
+      password: password,
+      displayName: displayName || email.split('@')[0],
+      emailVerified: true, 
+    });
+
+    res.json({
+      success: true,
+      message: 'Usuario creado exitosamente',
+      uid: userRecord.uid
+    });
+
+  } catch (error) {
+    console.error('Error al crear usuario:', error);
+    
+    if (error.code === 'auth/email-already-exists') {
+      return res.status(400).json({
+        success: false,
+        message: 'El usuario ya existe. Use la opción de inicio de sesión.'
+      });
+    }
+    
+    if (error.code === 'auth/weak-password') {
+      return res.status(400).json({
+        success: false,
+        message: 'La contraseña debe tener al menos 6 caracteres'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor'
+    });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/set-password', async (req, res) => {
+  const { email, newPassword } = req.body;
+
+  if (!email || !newPassword) {
+    return res.status(400).json({
+      success: false,
+      message: 'Email y nueva contraseña son requeridos'
+    });
+  }
+
+  if (newPassword.length < 6) {
+    return res.status(400).json({
+      success: false,
+      message: 'La contraseña debe tener al menos 6 caracteres'
+    });
+  }
+
+  const client = await pool.connect();
+  try {
+    const queryCheck = 'SELECT EXISTS(SELECT 1 FROM usuario WHERE correo = $1) AS exists';
+    const resultCheck = await client.query(queryCheck, [email]);
+    
+    if (!resultCheck.rows[0].exists) {
+      return res.status(403).json({
+        success: false,
+        message: 'Usuario no autorizado'
+      });
+    }
+    
+    const userRecord = await admin.auth().getUserByEmail(email);
+    
+    await admin.auth().updateUser(userRecord.uid, {
+      password: newPassword
+    });
+
+    res.json({
+      success: true,
+      message: 'Contraseña establecida exitosamente'
+    });
+
+  } catch (error) {
+    console.error('Error al establecer contraseña:', error);
+    
+    if (error.code === 'auth/user-not-found') {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado'
+      });
+    }
+    
+    if (error.code === 'auth/weak-password') {
+      return res.status(400).json({
+        success: false,
+        message: 'La contraseña debe tener al menos 6 caracteres'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor'
+    });
+  } finally {
+    client.release();
+  }
+});
+
+passport.use(
+  new GoogleStrategy(
+    {
+      clientID: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      callbackURL: "http://localhost:3000/auth/google/callback",
+    },
+    (accessToken, refreshToken, profile, done) => {
+      return done(null, profile);
+    }
+  )
+);
+
 
 
 passport.use(
