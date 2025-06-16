@@ -900,7 +900,7 @@ app.get('/saberes', async (req, res) => {
 app.get('/users', async (req, res) => {
   const client = await pool.connect();
   try {
-    const result = await client.query('SELECT * FROM usuarios');
+    const result = await client.query('SELECT * FROM usuario');
     res.json({
       success: true,
       data: result.rows
@@ -974,7 +974,7 @@ app.get('/materias', async (req, res) => {
   const client = await pool.connect();
   const { email} = req.query;
   try {
-    const query = 'SELECT m.* FROM materia m JOIN usuarios u ON m.docente_id = u.id WHERE u.correo = $1';
+    const query = 'SELECT m.* FROM materia m JOIN usuario u ON m.docente_id = u.id WHERE u.correo = $1';
     const result = await client.query(query, [email]);
     res.json({
       data: result.rows
@@ -1004,7 +1004,7 @@ app.get('/validate-email', async (req, res) => {
   const client = await pool.connect();
   try {
 
-    const query = 'SELECT EXISTS(SELECT 1 FROM usuarios WHERE correo = $1) AS exists';
+    const query = 'SELECT EXISTS(SELECT 1 FROM usuario WHERE correo = $1) AS exists';
     const result = await client.query(query, [email]);
     res.json({
       exists: result.rows[0].exists
