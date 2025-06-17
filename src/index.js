@@ -96,7 +96,6 @@ async function sendFCMNotification(fcmTokens, payload) {
 
     const responses = [];
     for (const tokenRow of fcmTokens) {
-      
       const token = tokenRow.fcm_token;
       console.log('Token:', token);
       console.log('Payload:', payload);
@@ -110,6 +109,27 @@ async function sendFCMNotification(fcmTokens, payload) {
         data: {
           type: payload.type || 'general',
           competitionId: payload.competitionId ? payload.competitionId.toString() : ''
+        },
+        android: {
+          notification: {
+            channel_id: 'competition_notifications',
+            priority: 'high',
+            default_sound: true,
+            default_vibrate_timings: true,
+            default_light_settings: true
+          }
+        },
+        apns: {
+          payload: {
+            aps: {
+              alert: {
+                title: payload.title,
+                body: payload.body
+              },
+              sound: 'default',
+              badge: 1
+            }
+          }
         }
       };
 
@@ -160,9 +180,8 @@ async function checkAndSendNotifications() {
     const now = new Date();
     const sevenDaysFromNow = new Date(now.getTime() + (7 * 24 * 60 * 60 * 1000));
     
-    
     const overdueCompetitions = await query(`
-      SELECT ec.*, ec.id as competition_id, m.docente_id as user_id
+      SELECT ec.*, ec.id as competition_id, m.docente_id as user_id, m.name as materia_nombre
       FROM elemento_competencia ec
       JOIN materia m ON ec.materia_id = m.id
       WHERE ec.fecha_limite < $1 
@@ -178,7 +197,7 @@ async function checkAndSendNotifications() {
     
     
     const upcomingCompetitions = await query(`
-      SELECT ec.*, ec.id as competition_id, m.docente_id as user_id
+      SELECT ec.*, ec.id as competition_id, m.docente_id as user_id, m.name as materia_nombre
       FROM elemento_competencia ec
       JOIN materia m ON ec.materia_id = m.id
       WHERE ec.fecha_limite BETWEEN $1 AND $2
@@ -195,15 +214,15 @@ async function checkAndSendNotifications() {
     console.log(`Found ${overdueCompetitions.length} overdue competitions`);
     console.log(`Found ${upcomingCompetitions.length} upcoming competitions`);
     
-    
     for (const comp of overdueCompetitions) {
-      
       const tokenResult = await query('SELECT fcm_token FROM usuario_fcm_token WHERE user_id = $1', [comp.user_id]);
+      
+      const bodyMessage = `Elemento de competencia ${comp.descripcion[0]} ha vencido. Materia: ${comp.materia_nombre}`;
       
       if (tokenResult.length > 0) {
         await sendFCMNotification(tokenResult, {
           title: "Fecha límite vencida",
-          body: `${comp.descripcion} - La fecha límite ha pasado`,
+          body: bodyMessage,
           type: 'deadline_passed',
           competitionId: comp.competition_id
         });
@@ -216,19 +235,20 @@ async function checkAndSendNotifications() {
         comp.competition_id, 
         'deadline_passed', 
         "Fecha límite vencida", 
-        `${comp.descripcion} - La fecha límite ha pasado`
+        bodyMessage
       );
     }
     
-    
     for (const comp of upcomingCompetitions) {
-      
       const tokenResult = await query('SELECT fcm_token FROM usuario_fcm_token WHERE user_id = $1', [comp.user_id]);
+      
+      
+      const bodyMessage = `Elemento de competencia ${comp.descripcion[0]} vence en 7 días. Materia: ${comp.materia_nombre}`;
       
       if (tokenResult.length > 0) {
         await sendFCMNotification(tokenResult, {
-          title: "Fecha límite próxima",
-          body: `${comp.descripcion} - Vence en 7 días`,
+          title: "Recordatorio de fecha límite",
+          body: bodyMessage,
           type: 'deadline_7days',
           competitionId: comp.competition_id
         });
@@ -240,8 +260,8 @@ async function checkAndSendNotifications() {
         comp.user_id, 
         comp.competition_id, 
         'deadline_7days',
-        "Fecha límite próxima", 
-        `${comp.descripcion} - Vence en 7 días`
+        "Recordatorio de fecha límite", 
+        bodyMessage
       );
     }
     
