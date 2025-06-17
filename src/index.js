@@ -44,8 +44,8 @@ const app = express();
 const port = process.env.PORT || 5001;
 
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, 
-  max: 100, 
+  windowMs: 15 * 60 * 10000, 
+  max: 1000, 
   standardHeaders: true,
   legacyHeaders: false,
   message: {
