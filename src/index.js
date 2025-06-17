@@ -87,59 +87,50 @@ function isValidEmail(email) {
   return emailRegex.test(email);
 }
 
+async function sendFCMNotification(fcmTokens, payload) {
+  
 
-async function sendFCMNotification(fcmToken, payload) {
   try {
-    const tokens = await query(
-      'SELECT fcm_token FROM usuario_fcm_token WHERE user_id = $1',
-      [userId]
-    );
-    
-    if (tokens.length === 0) {
-      console.log(`No hay tokens FCM para el usuario ${userId}`);
+    if (!fcmTokens || fcmTokens.length === 0) {
+      console.log('No FCM tokens provided');
       return;
     }
 
-    const fcmTokens = tokens.map(row => row.fcm_token);
-
-    const message = {
-      tokens: fcmTokens,
-      notification: {
-        title: payload.title,
-        body: payload.body
-      },
-      data: {
-        type: payload.type || 'general',
-        competitionId: payload.competitionId?.toString() || ''
-      }
-    };
-
-    const response = await admin.messaging().sendMulticast(message);
-
-    if (response.failureCount > 0) {
-      const failedTokens = [];
-      response.responses.forEach((resp, idx) => {
-        if (!resp.success) {
-          failedTokens.push(fcmTokens[idx]);
+    const responses = [];
+    for (const token of fcmTokens) {
+      console.log(token);
+      console.log(payload);
+      const message = {
+        token: token.trim(),
+        notification: {
+          title: payload.title,
+          body: payload.body
+        },
+        data: {
+          type: payload.type || 'general',
+          competitionId: payload.competitionId ? payload.competitionId.toString() : ''
         }
-      });
-      
-      if (failedTokens.length > 0) {
-        await query(
-          'DELETE FROM usuario_fcm_token WHERE fcm_token = ANY($1)',
-          [failedTokens]
-        );
-        console.log(`Removed ${failedTokens.length} invalid FCM tokens`);
+      };
+
+      try {
+        const response = await admin.messaging().send(message);
+        console.log('FCM notification sent successfully:', response);
+        responses.push(response);
+      } catch (error) {
+        console.error('Error sending FCM notification:', error);
+        if (error.code === 'messaging/invalid-registration-token' ||
+            error.code === 'messaging/registration-token-not-registered') {
+          await removeInvalidFcmToken(token);
+        }
       }
     }
 
-    console.log(`Notificación enviada a ${response.successCount} dispositivos del usuario ${userId}`);
-    return response;
+    return responses;
   } catch (error) {
-    console.error('Error sending FCM notification:', error);
-    
+    console.error('Unexpected error in sendFCMNotification:', error);
   }
 }
+
 
 
 async function removeInvalidFcmToken(fcmToken) {
@@ -150,7 +141,6 @@ async function removeInvalidFcmToken(fcmToken) {
     console.error('Error removing invalid FCM token:', error);
   }
 }
-
 
 async function saveNotificationToHistory(userId, competitionId, type, title, message) {
   try {
@@ -174,43 +164,47 @@ async function checkAndSendNotifications() {
     const now = new Date();
     const sevenDaysFromNow = new Date(now.getTime() + (7 * 24 * 60 * 60 * 1000));
     
-    
+    // Obtener competencias vencidas
     const overdueCompetitions = await query(`
-      SELECT ec.*, ut.fcm_token, ec.id as competition_id, m.docente_id as user_id
+      SELECT ec.*, ec.id as competition_id, m.docente_id as user_id
       FROM elemento_competencia ec
       JOIN materia m ON ec.materia_id = m.id
-      JOIN usuario_fcm_token ut ON m.docente_id = ut.user_id
       WHERE ec.fecha_limite < $1 
       AND ec.completado = FALSE
       AND NOT EXISTS (
         SELECT 1 FROM notificacion n 
         WHERE n.usuario_id = m.docente_id 
-        AND n.mensaje LIKE '%' || ec.descripcion || '%'
-        AND n.mensaje LIKE '%deadline_passed%'
+        AND n.competencia_id = ec.id
+        AND n.tipo = 'deadline_passed'
         AND DATE(n.fecha) = CURRENT_DATE
       )
     `, [now]);
     
+    // Obtener competencias próximas a vencer
     const upcomingCompetitions = await query(`
-      SELECT ec.*, ut.fcm_token, ec.id as competition_id, m.docente_id as user_id
+      SELECT ec.*, ec.id as competition_id, m.docente_id as user_id
       FROM elemento_competencia ec
       JOIN materia m ON ec.materia_id = m.id
-      JOIN usuario_fcm_token ut ON m.docente_id = ut.user_id
       WHERE ec.fecha_limite BETWEEN $1 AND $2
       AND ec.completado = FALSE
       AND NOT EXISTS (
         SELECT 1 FROM notificacion n 
         WHERE n.usuario_id = m.docente_id 
-        AND n.mensaje LIKE '%' || ec.descripcion || '%'
-        AND n.mensaje LIKE '%deadline_7days%'
+        AND n.competencia_id = ec.id
+        AND n.tipo = 'deadline_7days'
         AND DATE(n.fecha) = CURRENT_DATE
       )
     `, [now, sevenDaysFromNow]);
     
     console.log(`Found ${overdueCompetitions.length} overdue competitions`);
     console.log(`Found ${upcomingCompetitions.length} upcoming competitions`);
+    
+    // Enviar notificaciones para competencias vencidas
     for (const comp of overdueCompetitions) {
-      await sendFCMNotification(comp.fcm_token, {
+     
+      const tokenResult = await query('SELECT fcm_token FROM usuario_fcm_token WHERE user_id = $1', [comp.user_id]);
+      
+      await sendFCMNotification(tokenResult, {
         title: "Fecha límite vencida",
         body: `${comp.descripcion} - La fecha límite ha pasado`,
         type: 'deadline_passed',
@@ -225,11 +219,10 @@ async function checkAndSendNotifications() {
         `${comp.descripcion} - La fecha límite ha pasado`
       );
     }
-
-   
     
+    // Enviar notificaciones para competencias próximas a vencer
     for (const comp of upcomingCompetitions) {
-      await sendFCMNotification(comp.fcm_token, {
+      await sendFCMNotification(comp.user_id, {
         title: "Fecha límite próxima",
         body: `${comp.descripcion} - Vence en 7 días`,
         type: 'deadline_7days',
@@ -569,10 +562,11 @@ app.patch('/materia/:id/increment', async (req, res) => {
     const { 
       rec_tomados = 0, 
       elem_completados = 0, 
-      elem_evaluados = 0 
+      elem_evaluados = 0,
+      rec_totales = 0
     } = req.body;
     
-    if (rec_tomados === 0 && elem_completados === 0 && elem_evaluados === 0) {
+    if (rec_tomados === 0 && elem_completados === 0 && elem_evaluados === 0 && rec_totales===0) {
       return res.status(400).json({
         success: false,
         message: 'Debe proporcionar al menos un incremento diferente de 0'
@@ -584,12 +578,13 @@ app.patch('/materia/:id/increment', async (req, res) => {
       SET 
         rec_tomados = COALESCE(rec_tomados, 0) + $1,
         elem_completados = COALESCE(elem_completados, 0) + $2,
-        elem_evaluados = COALESCE(elem_evaluados, 0) + $3
-      WHERE id = $4 
+        elem_evaluados = COALESCE(elem_evaluados, 0) + $3,
+        rec_totales = COALESCE(rec_totales, 0) + $4
+      WHERE id = $5 
       RETURNING *
     `;
     
-    const result = await client.query(query, [rec_tomados, elem_completados, elem_evaluados, id]);
+    const result = await client.query(query, [rec_tomados, elem_completados, elem_evaluados, rec_totales, id]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({
