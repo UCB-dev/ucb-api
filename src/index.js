@@ -88,8 +88,6 @@ function isValidEmail(email) {
 }
 
 async function sendFCMNotification(fcmTokens, payload) {
-  
-
   try {
     if (!fcmTokens || fcmTokens.length === 0) {
       console.log('No FCM tokens provided');
@@ -97,9 +95,12 @@ async function sendFCMNotification(fcmTokens, payload) {
     }
 
     const responses = [];
-    for (const token of fcmTokens) {
-      console.log(token);
-      console.log(payload);
+    for (const tokenRow of fcmTokens) {
+      
+      const token = tokenRow.fcm_token;
+      console.log('Token:', token);
+      console.log('Payload:', payload);
+      
       const message = {
         token: token.trim(),
         notification: {
@@ -131,8 +132,6 @@ async function sendFCMNotification(fcmTokens, payload) {
   }
 }
 
-
-
 async function removeInvalidFcmToken(fcmToken) {
   try {
     await query('DELETE FROM usuario_fcm_token WHERE fcm_token = $1', [fcmToken]);
@@ -154,9 +153,6 @@ async function saveNotificationToHistory(userId, competitionId, type, title, mes
   }
 }
 
-
-
-
 async function checkAndSendNotifications() {
   console.log('Checking for notifications to send...');
   
@@ -164,7 +160,7 @@ async function checkAndSendNotifications() {
     const now = new Date();
     const sevenDaysFromNow = new Date(now.getTime() + (7 * 24 * 60 * 60 * 1000));
     
-    // Obtener competencias vencidas
+    
     const overdueCompetitions = await query(`
       SELECT ec.*, ec.id as competition_id, m.docente_id as user_id
       FROM elemento_competencia ec
@@ -180,7 +176,7 @@ async function checkAndSendNotifications() {
       )
     `, [now]);
     
-    // Obtener competencias próximas a vencer
+    
     const upcomingCompetitions = await query(`
       SELECT ec.*, ec.id as competition_id, m.docente_id as user_id
       FROM elemento_competencia ec
@@ -199,17 +195,21 @@ async function checkAndSendNotifications() {
     console.log(`Found ${overdueCompetitions.length} overdue competitions`);
     console.log(`Found ${upcomingCompetitions.length} upcoming competitions`);
     
-    // Enviar notificaciones para competencias vencidas
+    
     for (const comp of overdueCompetitions) {
-     
+      
       const tokenResult = await query('SELECT fcm_token FROM usuario_fcm_token WHERE user_id = $1', [comp.user_id]);
       
-      await sendFCMNotification(tokenResult, {
-        title: "Fecha límite vencida",
-        body: `${comp.descripcion} - La fecha límite ha pasado`,
-        type: 'deadline_passed',
-        competitionId: comp.competition_id
-      });
+      if (tokenResult.length > 0) {
+        await sendFCMNotification(tokenResult, {
+          title: "Fecha límite vencida",
+          body: `${comp.descripcion} - La fecha límite ha pasado`,
+          type: 'deadline_passed',
+          competitionId: comp.competition_id
+        });
+      } else {
+        console.log(`No FCM tokens found for user ${comp.user_id}`);
+      }
       
       await saveNotificationToHistory(
         comp.user_id, 
@@ -220,14 +220,21 @@ async function checkAndSendNotifications() {
       );
     }
     
-    // Enviar notificaciones para competencias próximas a vencer
+    
     for (const comp of upcomingCompetitions) {
-      await sendFCMNotification(comp.user_id, {
-        title: "Fecha límite próxima",
-        body: `${comp.descripcion} - Vence en 7 días`,
-        type: 'deadline_7days',
-        competitionId: comp.competition_id
-      });
+      
+      const tokenResult = await query('SELECT fcm_token FROM usuario_fcm_token WHERE user_id = $1', [comp.user_id]);
+      
+      if (tokenResult.length > 0) {
+        await sendFCMNotification(tokenResult, {
+          title: "Fecha límite próxima",
+          body: `${comp.descripcion} - Vence en 7 días`,
+          type: 'deadline_7days',
+          competitionId: comp.competition_id
+        });
+      } else {
+        console.log(`No FCM tokens found for user ${comp.user_id}`);
+      }
       
       await saveNotificationToHistory(
         comp.user_id, 
@@ -354,6 +361,8 @@ app.post('/fcm-token', async (req, res) => {
       });
     }
     
+    console.log(`Registrando FCM token para email: ${email}`);
+    
     
     const userResult = await query(
       'SELECT id FROM usuario WHERE correo = $1 AND activo = true',
@@ -368,30 +377,46 @@ app.post('/fcm-token', async (req, res) => {
     }
     
     const userId = userResult[0].id;
+    console.log(`Usuario encontrado con ID: ${userId}`);
     
     
     const existingToken = await query(
-      'SELECT id FROM usuario_fcm_token WHERE fcm_token = $1',
+      'SELECT id, user_id FROM usuario_fcm_token WHERE fcm_token = $1',
       [fcmToken]
     );
     
     if (existingToken.length > 0) {
+      console.log(`Token existente encontrado, asociado al usuario: ${existingToken[0].user_id}`);
+      
       
       await query(
-        'UPDATE usuario_fcm_token SET updated_at = NOW() WHERE fcm_token = $1',
-        [fcmToken]
+        'UPDATE usuario_fcm_token SET user_id = $1, updated_at = NOW() WHERE fcm_token = $2',
+        [userId, fcmToken]
       );
+      
+      console.log(`Token actualizado para usuario: ${userId}`);
     } else {
       
       await query(
         'INSERT INTO usuario_fcm_token (user_id, fcm_token, updated_at) VALUES ($1, $2, NOW())',
         [userId, fcmToken]
       );
+      
+      console.log(`Nuevo token insertado para usuario: ${userId}`);
     }
+    
+    
+    const verificationResult = await query(
+      'SELECT user_id FROM usuario_fcm_token WHERE fcm_token = $1',
+      [fcmToken]
+    );
+    
+    console.log(`Verificación: Token asociado al usuario: ${verificationResult[0]?.user_id}`);
     
     res.json({ 
       success: true,
-      message: 'Token FCM registrado correctamente'
+      message: 'Token FCM registrado correctamente',
+      userId: userId
     });
   } catch (error) {
     console.error('Error updating FCM token:', error);
