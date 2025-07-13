@@ -82,6 +82,87 @@ async function query(text, params) {
 }
 
 
+
+
+
+app.get('/api/materias/progreso', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { gestion } = req.query;
+
+    let query = `
+      SELECT 
+        m.name AS nombre_materia,
+        
+  
+        SUM(m.elementos_totales) AS elementos_totales,
+        SUM(m.elem_completados) AS elem_completados,
+        SUM(m.elem_evaluados) AS elem_evaluados,
+        SUM(m.rec_totales) AS rec_totales,
+        SUM(m.rec_tomados) AS rec_tomados,
+
+    
+        ROUND(
+          (SUM(m.elem_completados)::DECIMAL / NULLIF(SUM(m.elementos_totales), 0)) * 100
+        ) AS progreso_general,
+
+      
+        ROUND(
+          (SUM(m.elem_evaluados)::DECIMAL / NULLIF(SUM(m.elementos_totales), 0)) * 100
+        ) AS evaluaciones,
+
+        
+        COALESCE(
+          ROUND(AVG(
+            CASE WHEN ec.saberes_totales > 0 THEN
+              (ec.saberes_completados::DECIMAL / ec.saberes_totales) * 100
+            ELSE 0 END
+          )), 0
+        ) AS saberes_minimos
+
+      FROM materia m
+      LEFT JOIN elemento_competencia ec ON m.id = ec.materia_id
+      WHERE m.vigente = true
+    `;
+
+    const params = [];
+    if (gestion) {
+      query += ` AND m.gestion = $1`;
+      params.push(gestion);
+    }
+
+    query += `
+      GROUP BY m.name
+      ORDER BY m.name;
+    `;
+
+    const result = await client.query(query, params);
+
+    res.json({
+      success: true,
+      data: result.rows
+    });
+  } catch (error) {
+    console.error('Error al obtener progreso de materias:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener progreso de materias',
+      error: error.message
+    });
+  } finally {
+    client.release();
+  }
+});
+
+
+
+
+
+
+
+
+// Endpoints para mobile
+
 function isValidEmail(email) {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return emailRegex.test(email);
@@ -250,7 +331,8 @@ async function checkAndSendNotifications() {
           title: "Recordatorio de fecha límite",
           body: bodyMessage,
           type: 'deadline_7days',
-          competitionId: comp.competition_id
+          competitionId: comp.competition_id,
+          image: 'https://i.imgur.com/qx7dD2k.png'
         });
       } else {
         console.log(`No FCM tokens found for user ${comp.user_id}`);
