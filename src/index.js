@@ -56,8 +56,10 @@ const apiLimiter = rateLimit({
 
 app.use(express.json());
 app.use(apiLimiter);
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: process.env.FRONTEND_URL || 'http://localhost:8080',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   credentials: true
 }));
 app.use(session({
@@ -83,6 +85,163 @@ async function query(text, params) {
 
 
 
+app.post('/api/upload-excel-data', async (req, res) => {
+  const { docentes, materias, elementos } = req.body;
+  
+  if (!docentes || !materias || !elementos) {
+    return res.status(400).json({ 
+      error: 'Faltan datos requeridos: docentes, materias, elementos' 
+    });
+  }
+
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    console.log('Iniciando reemplazo completo de datos...');
+    
+    console.log('Limpiando datos existentes...');
+    
+    await client.query('DELETE FROM recuperatorio');
+    console.log('Recuperatorios eliminados');
+    
+    await client.query('DELETE FROM saber_minimo');
+    console.log('Saberes mínimos eliminados');
+    
+    await client.query('DELETE FROM elemento_competencia');
+    console.log('Elementos de competencia eliminados');
+    
+    await client.query('DELETE FROM materia');
+    console.log('Materias eliminadas');
+    
+   
+    console.log(`Procesando ${docentes.length} docentes...`);
+    
+    const docentesCreados = new Map(); 
+    
+    for (const docente of docentes) {
+      try {
+        const docenteExistente = await client.query(
+          'SELECT id FROM usuario WHERE correo = $1',
+          [docente.correo]
+        );
+        
+        let docenteId;
+        
+        if (docenteExistente.rows.length > 0) {
+          docenteId = docenteExistente.rows[0].id;
+          await client.query(
+            'UPDATE usuario SET nombre = $1, picture = $2 WHERE correo = $3',
+            [docente.nombre, docente.picture, docente.correo]
+          );
+          console.log(`Docente actualizado: ${docente.correo}`);
+        } else {
+          const nuevoDocente = await client.query(
+            'INSERT INTO usuario (correo, nombre, picture) VALUES ($1, $2, $3) RETURNING id',
+            [docente.correo, docente.nombre, docente.picture]
+          );
+          docenteId = nuevoDocente.rows[0].id;
+          console.log(`Docente creado: ${docente.correo}`);
+        }
+        
+        docentesCreados.set(docente.correo, docenteId);
+        
+      } catch (error) {
+        console.error(`Error procesando docente ${docente.correo}:`, error.message);
+        throw error;
+      }
+    }
+    
+    console.log(`Procesando ${materias.length} materias...`);
+    
+    for (const materia of materias) {
+      try {
+        const docenteId = docentesCreados.get(materia.docente_correo);
+        
+        if (!docenteId) {
+          throw new Error(`No se encontró el docente: ${materia.docente_correo}`);
+        }
+        
+        await client.query(`
+          INSERT INTO materia (id, name, image, docente_id, paralelo, sigla, gestion, 
+                              elementos_totales, rec_totales, rec_tomados, elem_evaluados, elem_completados)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        `, [
+          materia.id, materia.name, materia.image, docenteId,
+          materia.paralelo, materia.sigla, materia.gestion,
+          materia.elementos_totales || 0, materia.rec_totales || 0, 
+          materia.rec_tomados || 0, materia.elem_evaluados || 0, 
+          materia.elem_completados || 0
+        ]);
+        console.log(`Materia creada: ${materia.id}`);
+        
+      } catch (error) {
+        console.error(`Error procesando materia ${materia.id}:`, error.message);
+        throw error;
+      }
+    }
+    console.log(`Procesando ${elementos.length} elementos de competencia...`);
+    
+    for (const elemento of elementos) {
+      try {
+        const nuevoElemento = await client.query(`
+          INSERT INTO elemento_competencia (materia_id, descripcion, fecha_limite, saberes_totales, saberes_completados)
+          VALUES ($1, $2, $3, $4, $5)
+          RETURNING id
+        `, [
+          elemento.materia_id,
+          elemento.descripcion,
+          elemento.fecha_limite,
+          elemento.saberes_totales || elemento.saberes.length,
+          elemento.saberes_completados || 0
+        ]);
+        
+        const elementoId = nuevoElemento.rows[0].id;
+        console.log(`Elemento creado: ${elemento.descripcion} (ID: ${elementoId})`);
+        
+        for (const saberDescripcion of elemento.saberes) {
+          await client.query(`
+            INSERT INTO saber_minimo (elemento_competencia_id, descripcion)
+            VALUES ($1, $2)
+          `, [elementoId, saberDescripcion]);
+        }
+        console.log(`${elemento.saberes.length} saberes creados para elemento ${elementoId}`);
+        
+      } catch (error) {
+        console.error(`Error procesando elemento ${elemento.descripcion}:`, error.message);
+        throw error;
+      }
+    }
+    
+    await client.query('COMMIT');
+    console.log('¡Reemplazo de datos completado exitosamente!');
+    
+    res.status(200).json({
+      success: true,
+      message: 'Base de datos reemplazada exitosamente',
+      resumen: {
+        docentes_procesados: docentes.length,
+        materias_procesadas: materias.length,
+        elementos_procesados: elementos.length,
+        saberes_totales: elementos.reduce((sum, el) => sum + el.saberes.length, 0)
+      }
+    });
+    
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error en el reemplazo de datos:', error);
+    
+    res.status(500).json({
+      success: false,
+      error: 'Error interno del servidor',
+      details: error.message
+    });
+    
+  } finally {
+    client.release();
+  }
+});
 
 
 app.get('/api/materias/progreso', async (req, res) => {
@@ -93,25 +252,21 @@ app.get('/api/materias/progreso', async (req, res) => {
     let query = `
       SELECT 
         m.name AS nombre_materia,
-        
-  
+
         SUM(m.elementos_totales) AS elementos_totales,
         SUM(m.elem_completados) AS elem_completados,
         SUM(m.elem_evaluados) AS elem_evaluados,
         SUM(m.rec_totales) AS rec_totales,
         SUM(m.rec_tomados) AS rec_tomados,
 
-    
         ROUND(
           (SUM(m.elem_completados)::DECIMAL / NULLIF(SUM(m.elementos_totales), 0)) * 100
         ) AS progreso_general,
 
-      
         ROUND(
           (SUM(m.elem_evaluados)::DECIMAL / NULLIF(SUM(m.elementos_totales), 0)) * 100
         ) AS evaluaciones,
 
-        
         COALESCE(
           ROUND(AVG(
             CASE WHEN ec.saberes_totales > 0 THEN
@@ -122,7 +277,7 @@ app.get('/api/materias/progreso', async (req, res) => {
 
       FROM materia m
       LEFT JOIN elemento_competencia ec ON m.id = ec.materia_id
-      WHERE m.vigente = true
+      WHERE TRUE
     `;
 
     const params = [];
@@ -154,14 +309,190 @@ app.get('/api/materias/progreso', async (req, res) => {
   }
 });
 
+app.get('/api/materias/:nombre_materia/rendimiento-paralelo', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { nombre_materia } = req.params;
+    const { gestion } = req.query;
+
+    if (!nombre_materia || nombre_materia.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'El nombre de la materia es requerido',
+      });
+    }
+
+    let query = `
+      SELECT 
+        m.id AS materia_id,
+        m.name AS nombre_materia,
+        m.paralelo,
+        m.elementos_totales,
+        m.elem_completados,
+        m.elem_evaluados,
+        m.rec_totales,
+        m.rec_tomados
+      FROM materia m
+      WHERE TRUE
+    `;
+
+    const params = [];
+    let paramCount = 1;
+
+    query += ` AND m.name ILIKE $${paramCount}`;
+    params.push(nombre_materia);
+    paramCount++;
+
+    if (gestion) {
+      query += ` AND m.gestion = $${paramCount}`;
+      params.push(gestion);
+      paramCount++;
+    }
+
+    const result = await client.query(query, params);
+
+    res.json({
+      success: true,
+      data: result.rows,
+    });
+  } catch (error) {
+    console.error('Error al obtener rendimiento por paralelo:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener rendimiento por paralelo',
+      error: error.message,
+    });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/api/materia/:nombre_materia/elementos-por-paralelo', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const nombre_materia = req.params.nombre_materia;
+
+    if (!nombre_materia) {
+      return res.status(400).json({
+        success: false,
+        message: 'El nombre de la materia es requerido',
+      });
+    }
+    
+    const paralelosResult = await client.query(
+      `
+      SELECT m.id, m.paralelo, u.id as docente_id, u.nombre as docente_nombre, u.correo as docente_correo
+      FROM materia m
+      JOIN usuario u ON m.docente_id = u.id
+      WHERE m.name ILIKE $1
+      `,
+      [nombre_materia]
+    );
+
+    if (paralelosResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No se encontraron paralelos para la materia especificada',
+      });
+    }
+
+    const data = [];
+
+    for (const paraleloRow of paralelosResult.rows) {
+      const materiaId = paraleloRow.id;
+      const paralelo = paraleloRow.paralelo;
+
+      const elementosResult = await client.query(
+        `
+        SELECT 
+          ec.id,
+          ec.descripcion,
+          ec.completado,
+          ec.evaluado,
+          ec.saberes_totales,
+          ec.saberes_completados,
+          ec.fecha_limite,
+          ec.fecha_registro,
+          ec.fecha_evaluado,
+          ec.comentario
+        FROM elemento_competencia ec
+        WHERE ec.materia_id = $1
+        ORDER BY ec.id
+        `,
+        [materiaId]
+      );
+
+      const elementos = [];
+
+      for (const elemento of elementosResult.rows) {
+        const saberesResult = await client.query(
+          `
+          SELECT descripcion, completado
+          FROM saber_minimo
+          WHERE elemento_competencia_id = $1
+          ORDER BY id
+          `,
+          [elemento.id]
+        );
+
+        const saberes_minimos = saberesResult.rows.map(s => [s.descripcion, s.completado]);
+
+        const recuperatoriosResult = await client.query(
+          `
+          SELECT completado, fecha_evaluado
+          FROM recuperatorio
+          WHERE elemento_competencia_id = $1
+          ORDER BY id
+          `,
+          [elemento.id]
+        );
+
+        const recuperatorios = recuperatoriosResult.rows.map(r => [r.completado, r.fecha_evaluado]);
+
+        elementos.push({
+          id: elemento.id,
+          descripcion: elemento.descripcion,
+          completado: elemento.completado,
+          evaluado: elemento.evaluado,
+          saberes_totales: elemento.saberes_totales,
+          saberes_completados: elemento.saberes_completados,
+          fecha_limite: elemento.fecha_limite,
+          fecha_registro: elemento.fecha_registro,
+          fecha_evaluado: elemento.fecha_evaluado,
+          comentario: elemento.comentario,
+          saberes_minimos: saberes_minimos,
+          recuperatorios: recuperatorios
+        });
+      }
+
+      data.push({
+        paralelo,
+        docente: paraleloRow.docente_nombre,
+        elementos
+      });
+    }
+
+    res.json({
+      success: true,
+      data
+    });
+
+  } catch (error) {
+    console.error('Error al obtener elementos de competencia por paralelo:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener elementos de competencia por paralelo',
+      error: error.message,
+    });
+  } finally {
+    client.release();
+  }
+});
 
 
 
 
 
-
-
-// Endpoints para mobile
 
 function isValidEmail(email) {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -332,7 +663,6 @@ async function checkAndSendNotifications() {
           body: bodyMessage,
           type: 'deadline_7days',
           competitionId: comp.competition_id,
-          image: 'https://i.imgur.com/qx7dD2k.png'
         });
       } else {
         console.log(`No FCM tokens found for user ${comp.user_id}`);
@@ -353,18 +683,6 @@ async function checkAndSendNotifications() {
 }
 
 
-passport.use(
-  new GoogleStrategy(
-    {
-      clientID: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: "http://localhost:3000/auth/google/callback",
-    },
-    (accessToken, refreshToken, profile, done) => {
-      return done(null, profile);
-    }
-  )
-);
 
 passport.serializeUser((user, done) => {
   done(null, user);
@@ -1275,35 +1593,6 @@ app.post('/set-password', async (req, res) => {
     client.release();
   }
 });
-
-passport.use(
-  new GoogleStrategy(
-    {
-      clientID: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: "http://localhost:3000/auth/google/callback",
-    },
-    (accessToken, refreshToken, profile, done) => {
-      return done(null, profile);
-    }
-  )
-);
-
-
-
-passport.use(
-  new GoogleStrategy(
-    {
-      clientID: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: "http://localhost:3000/auth/google/callback",
-    },
-    (accessToken, refreshToken, profile, done) => {
-      return done(null, profile);
-    }
-  )
-);
-
 
 
 cron.schedule('0 * * * *', () => {
