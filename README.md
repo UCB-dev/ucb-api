@@ -85,7 +85,7 @@ FIREBASE_CLIENT_EMAIL
 FIREBASE_CLIENT_ID
 FIREBASE_CLIENT_CERT_URL
 
-SESSION_SECRET=your-session-secret
+SESSION_SECRET
 ```
 
 ## Estructura de la Base de Datos
